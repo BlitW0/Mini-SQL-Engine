@@ -34,6 +34,8 @@ JOIN_ATTR_LIST = []
 
 
 def join(table1, table2):
+    """Returns CROSS JOIN of table1 and table2"""
+
     try:
         joined_table = defaultdict(dict)
         joined_table["attributes"] = table1["attributes"] + table2["attributes"]
@@ -42,16 +44,18 @@ def join(table1, table2):
             for row_b in table2["rows"]:
                 joined_table["rows"].append(row_a + row_b)
     except Exception as e:
-        print("JoinError: " + str(e))
+        print("JoinError:", str(e))
         exit(1)
     return joined_table
 
 
 def get_column_table(token):
+    """Returns table_name to which given attribute[token] belongs"""
+
     global TABLES
 
     col_tables = []
-    for table in [table_token.value for table_token in table_tokens]:
+    for table in [t.value for t in table_tokens]:
         if token.value in [name[len(table) + 1:] for name in TABLES[table]["attributes"]]:
             col_tables.append(table)
     
@@ -62,6 +66,8 @@ def get_column_table(token):
 
 
 def apply_condition(output):
+    """Applies conditions given in WHERE clause to resulting output of CROSS JOIN, i.e., filters result"""
+
     global JOIN_ATTR_LIST, condition_tokens, relational_ops, logical_op
 
     filtered_output = defaultdict(dict)
@@ -70,29 +76,37 @@ def apply_condition(output):
 
     for row in output["rows"]:
         should_include = None
+        
         for condition_token in condition_tokens:
             var1, var2, op = 3*[None]
             iden_cnt = 0
-            for token in condition_token.tokens:
-                if isinstance(token, sql.Identifier):
-                    attr_name = token.value if token.get_parent_name() else str(get_column_table(token) + "." + token.get_real_name())
-                    if var1 is None:
-                        var1 = row[output["attributes"].index(attr_name)]
-                    else:
-                        var2 = row[output["attributes"].index(attr_name)]
-                    if iden_cnt:
-                        if attr_name not in JOIN_ATTR_LIST:
-                            JOIN_ATTR_LIST.append(attr_name)
-                    iden_cnt += 1
-                elif token.ttype is T.Comparison:
-                    op = token.value
-                elif token.ttype is T.Number.Integer:
-                    if var1 is None:
-                        var1 = int(token.value)
-                    else:
-                        var2 = int(token.value)
+
+            try:
+                for token in condition_token.tokens:
+                    if isinstance(token, sql.Identifier):
+                        attr_name = token.value if token.get_parent_name() else str(get_column_table(token) + "." + token.get_real_name())
+                        if var1 is None:
+                            var1 = row[output["attributes"].index(attr_name)]
+                        else:
+                            var2 = row[output["attributes"].index(attr_name)]
+                        if iden_cnt:
+                            if attr_name not in JOIN_ATTR_LIST:
+                                JOIN_ATTR_LIST.append(attr_name)
+                        iden_cnt += 1
+                    elif token.ttype is T.Comparison:
+                        op = token.value
+                    elif token.ttype is T.Number.Integer:
+                        if var1 is None:
+                            var1 = int(token.value)
+                        else:
+                            var2 = int(token.value)
+            except Exception as e:
+                print("ConditionParsingError:", str(e))
+                exit(1)
+
             if op != "=":
                 JOIN_ATTR_LIST = []
+
             truth_val = relational_ops[op](var1, var2)
             if should_include is None:
                 should_include = truth_val
@@ -103,6 +117,7 @@ def apply_condition(output):
                     should_include = should_include and truth_val
                 elif logical_op == "OR":
                     should_include = should_include or truth_val
+        
         if not condition_tokens:
             should_include = True
         if should_include:
@@ -112,6 +127,8 @@ def apply_condition(output):
 
 
 def print_output(filtered_output):
+    """Projects given attributes and prints final result"""
+
     global JOIN_ATTR_LIST, wildcard_star, attribute_tokens, aggregate_ops
     attr_names = []
     idx_list = []
@@ -166,6 +183,8 @@ def print_output(filtered_output):
 
 
 def add_column(token):
+    """Adds attribute to attribute list"""
+
     global attribute_tokens
 
     if isinstance(token, sql.Identifier):
@@ -176,6 +195,8 @@ def add_column(token):
 
 
 def parser(query):
+    """Parses given SQL query"""
+
     global distinct, wildcard_star, condition_tokens, table_tokens
 
     parsed = sqlparse.parse(query)[0]
@@ -202,7 +223,6 @@ def parser(query):
                 if token.ttype is T.Wildcard:  # SELECT *
                     wildcard_star = True
                 elif token.ttype is T.Keyword and token.value.upper() == "DISTINCT": # DISTINCT
-                    print("sdknfk")
                     distinct = True
                 else:
                     add_column(token)
@@ -210,15 +230,16 @@ def parser(query):
 
         if isinstance(token, sql.Where):  # WHERE
             for token_d1 in token.tokens:
+                # print(token_d1.ttype, token_d1.__class__)
                 if isinstance(token_d1, sql.Comparison):  # Condition
-                    for token_d2 in token_d1.tokens:
-                        print(token_d2.ttype)
                     condition_tokens.append(token_d1)
                 if token_d1.ttype is T.Keyword and token_d1.value.upper() != "WHERE":
                     logical_op = token_d1.value.upper()
 
 
 def get_tables_metadata(metadata_path):
+    """Fetches and stores table schema from metadata file"""
+
     global TABLES
 
     try:
@@ -244,6 +265,8 @@ def get_tables_metadata(metadata_path):
         
 
 def get_table_data(files_dir, table_name):
+    """Fetches and stores table data from csv file given path and filename"""
+
     global TABLES
 
     try:
@@ -270,7 +293,7 @@ if __name__ == "__main__":
     for table_name in TABLES.keys():
         get_table_data(DIR_PATH, table_name)
     
-    query = """Select max(D) from table1;"""
+    query = """Select distinct A, table1.B from table1, table2;"""
 
     parser(query)
 
@@ -286,25 +309,14 @@ if __name__ == "__main__":
                 print("AttributeError: Attribute", attribute.value, "does not exist in given table(s)")
                 exit(1)
 
-    print(sqlparse.format(query, reindent=True, keyword_case='upper'))
-    print()
+    print(sqlparse.format(query, reindent=True, keyword_case='upper') + "\n")
 
-
-
-    output = None
+    joined_table = None
     for table in table_tokens:
-        if output is None:
-            output = TABLES[table.value]
+        if joined_table is None:
+            joined_table = TABLES[table.value]
         else:
-            output = join(output, TABLES[table.value])
+            joined_table = join(joined_table, TABLES[table.value])
 
-    # output = join("table1", "table2")
-    # # print(output)
-    # print(distinct)
-    # print(TABLES["table1"])
-    filtered_output = apply_condition(output)
-    # print(filtered_output)
+    filtered_output = apply_condition(joined_table)
     print_output(filtered_output)
-    # l = [1, 2, 3]
-    # print(aggregate_ops['AVG']([1,2,3]))
-    # print(parsed.tokens)
