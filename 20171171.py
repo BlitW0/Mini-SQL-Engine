@@ -1,6 +1,7 @@
 import operator
 from collections import defaultdict
 from statistics import mean
+import sys
 import sqlparse
 from sqlparse import sql
 from sqlparse import tokens as T
@@ -232,7 +233,6 @@ def parser(query):
             comp_cnt = 0
 
             for token_d1 in token.tokens:
-                # print(token_d1.ttype, token_d1.__class__)
                 if isinstance(token_d1, sql.Comparison):  # Condition
                     comp_cnt += 1
                     condition_tokens.append(token_d1)
@@ -350,12 +350,12 @@ def check_misc_errors():
             agg_cnt += 1
     
     # Aggregate Function Checking
-    if agg_cnt >= 1:
-        if len(table_tokens) > 1:
-            print("InvalidQueryError: Given aggregate function with multiple tables, GROUP BY clause not supported")
-            exit(1)
+    if agg_cnt:
         if agg_cnt > 1:
             print("AttributeError: Aggregate function supported only on one attribute")
+            exit(1)
+        if len(attribute_tokens) != 1:
+            print("AttributeError: Normal attributes not supported with aggregated attributes")
             exit(1)
 
 
@@ -379,8 +379,11 @@ def check_query_structure(query):
             if ";" in query[i]:
                 break
             i += 1
-        if i != len(query) - 1:
+        if i < len(query) - 1:
             print("InvalidQueryError: Only one SQL statement supported")
+            exit(1)
+        if ";" not in query[-1]:
+            print("SyntaxError: Missing semicolon ';' at the end of query")
             exit(1)
     else:
         print("SyntaxError: SELECT keyword", "spelt wrong" if query[i].upper() in "SELECT" else "missing")
@@ -390,13 +393,17 @@ def check_query_structure(query):
 
 if __name__ == "__main__":
 
+    if len(sys.argv) != 2:
+        print("Usage: python3 20171171.py \"<query_string>\"")
+        exit(1)
+    
+    query = sys.argv[1]
+
     get_tables_metadata(DIR_PATH + "/" + "metadata.txt")
     for table_name in TABLES.keys():
         get_table_data(DIR_PATH, table_name)
-    
-    query = """Select A from table1 where A > 10;"""
-    
-    print(sqlparse.format(query, reindent=True, keyword_case='upper') + "\n")
+
+    # print(sqlparse.format(query, reindent=True, keyword_case='upper') + "\n")
     
     check_query_structure(query)
     parser(query)
