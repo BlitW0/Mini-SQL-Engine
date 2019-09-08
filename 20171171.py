@@ -11,7 +11,7 @@ table_tokens = []
 condition_tokens = []
 logical_op = None
 distinct = False
-wildcard_star = False
+wildcard_star = None
 relational_ops = {
     '!=': operator.ne,
     '=': operator.eq,
@@ -84,6 +84,7 @@ def apply_condition(output):
             try:
                 for token in condition_token.tokens:
                     if isinstance(token, sql.Identifier):
+                        check_attribute(token)
                         attr_name = token.value if token.get_parent_name() else str(get_column_table(token) + "." + token.get_real_name())
                         if var1 is None:
                             var1 = row[output["attributes"].index(attr_name)]
@@ -197,7 +198,7 @@ def add_column(token):
 def parser(query):
     """Parses given SQL query"""
 
-    global distinct, wildcard_star, condition_tokens, table_tokens
+    global distinct, wildcard_star, condition_tokens, table_tokens, logical_op
 
     parsed = sqlparse.parse(query)[0]
     from_seen = False
@@ -213,14 +214,13 @@ def parser(query):
                 for identifier in token.get_identifiers():
                     table_tokens.append(identifier)
         else:  # attribute_tokens list
-
             if isinstance(token, sql.IdentifierList):
                 for identifier in token.get_identifiers():
                     add_column(identifier)
             else:
                 if token.ttype is T.DML:
                     continue
-                if token.ttype is T.Wildcard:  # SELECT *
+                if token.ttype is T.Wildcard and token.value == "*":  # SELECT *
                     wildcard_star = True
                 elif token.ttype is T.Keyword and token.value.upper() == "DISTINCT": # DISTINCT
                     distinct = True
@@ -229,12 +229,28 @@ def parser(query):
 
 
         if isinstance(token, sql.Where):  # WHERE
+            comp_cnt = 0
+
             for token_d1 in token.tokens:
                 # print(token_d1.ttype, token_d1.__class__)
                 if isinstance(token_d1, sql.Comparison):  # Condition
+                    comp_cnt += 1
                     condition_tokens.append(token_d1)
                 if token_d1.ttype is T.Keyword and token_d1.value.upper() != "WHERE":
+                    if comp_cnt != 1:
+                        print("WhereError: Incorrect syntax with logical operator")
+                        exit(1)
                     logical_op = token_d1.value.upper()
+            
+            if logical_op and comp_cnt < 2:
+                print("WhereError: Operand missing with logical operator")
+                exit(1)
+            if comp_cnt > 1 and logical_op is None:
+                print("WhereError: Logical operator missing and given multiple conditions")
+                exit(1)
+            if not condition_tokens:
+                print("WhereError: No conditions given")
+                exit(1)        
 
 
 def get_tables_metadata(metadata_path):
@@ -287,29 +303,104 @@ def get_table_data(files_dir, table_name):
         print("TabledataReadingError: " + str(e))
 
 
+def check_attribute(attribute):
+    """Handles attribute errors"""
+
+    global aggregate_ops, table_tokens
+
+    if type(attribute) == tuple:
+        if attribute[0].value.upper() not in aggregate_ops.keys():
+            print("FunctionError:", attribute[0].value + "()", "is invalid")
+            exit(1)
+        attribute = attribute[1]
+    if attribute.get_parent_name() is None:
+        if get_column_table(attribute) is None:
+            print("AttributeError: Attribute", attribute.value, "does not exist in given table(s)")
+            exit(1)
+    else:
+        if attribute.get_parent_name() not in [t.value for t in table_tokens]:
+            print("TableError:", attribute.get_parent_name(), "in", attribute.value, "not in given table list")
+            exit(1)
+
+
+def check_misc_errors():
+    """Checks unclassified errors"""
+
+    global attribute_tokens, wildcard_star, logical_op, condition_tokens, table_tokens
+
+    if not attribute_tokens and not wildcard_star:
+        print("SyntaxError: No attributes given")
+        print("Standard Query: select * from table_name where condition;")
+        exit(1)
+    if not table_tokens:
+        print("SyntaxError: No tables given")
+        print("Standard Query: select * from table_name where condition;")
+        exit(1)
+    if logical_op and not condition_tokens:
+        print("SyntaxError: No condition given")
+        print("Standard Query: select * from table_name where condition;")
+        exit(1)
+
+
+    # Attribute Checking
+    agg_cnt = 0
+    for attribute in attribute_tokens:
+        check_attribute(attribute)
+        if type(attribute) == tuple:
+            agg_cnt += 1
+    
+    # Aggregate Function Checking
+    if agg_cnt >= 1:
+        if len(table_tokens) > 1:
+            print("InvalidQueryError: Given aggregate function with multiple tables, GROUP BY clause not supported")
+            exit(1)
+        if agg_cnt > 1:
+            print("AttributeError: Aggregate function supported only on one attribute")
+            exit(1)
+
+
+def check_query_structure(query):
+    """Checks query structure for valid queries"""
+
+    query = query.split()
+
+    i = 0
+    if query[i].upper() == "SELECT":
+        i += 1
+        while i < len(query):
+            if query[i].upper() == "FROM":
+                break
+            i += 1
+        if i == len(query):
+            print("SyntaxError: FROM keyword missing")
+            print("Standard Query: select * from table_name where condition;")
+            exit(1)
+        while i < len(query):
+            if ";" in query[i]:
+                break
+            i += 1
+        if i != len(query) - 1:
+            print("InvalidQueryError: Only one SQL statement supported")
+            exit(1)
+    else:
+        print("SyntaxError: SELECT keyword", "spelt wrong" if query[i].upper() in "SELECT" else "missing")
+        print("Standard Query: select * from table_name where condition;")        
+        exit(1)
+
+
 if __name__ == "__main__":
 
     get_tables_metadata(DIR_PATH + "/" + "metadata.txt")
     for table_name in TABLES.keys():
         get_table_data(DIR_PATH, table_name)
     
-    query = """Select distinct A, table1.B from table1, table2;"""
-
-    parser(query)
-
-    # Attribute Checking
-    for attribute in attribute_tokens:
-        if type(attribute) == tuple:
-            if attribute[0].value.upper() not in aggregate_ops.keys():
-                print("FunctionError:", attribute[0].value + "()", "is invalid")
-                exit(1)
-            attribute = attribute[1]
-        if attribute.get_parent_name() is None:
-            if get_column_table(attribute) is None:
-                print("AttributeError: Attribute", attribute.value, "does not exist in given table(s)")
-                exit(1)
-
+    query = """Select A from table1 where A > 10;"""
+    
     print(sqlparse.format(query, reindent=True, keyword_case='upper') + "\n")
+    
+    check_query_structure(query)
+    parser(query)
+    check_misc_errors()
 
     joined_table = None
     for table in table_tokens:
